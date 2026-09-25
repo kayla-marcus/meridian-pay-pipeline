@@ -6,10 +6,12 @@ on:
   push:
     branches: ["**"]
 
-# Least privilege: this workflow only reads code and runs a local Docker
-# build/test, so it never needs write access to the repository.
+# Least privilege: this workflow reads code, pushes the built image to
+# GHCR, and signs it keylessly via OIDC - nothing more.
 permissions:
   contents: read
+  packages: write   # push the image to GitHub Container Registry
+  id-token: write   # request the short-lived OIDC token Cosign uses to sign
 
 jobs:
   build-and-test:
@@ -65,6 +67,48 @@ jobs:
           image: mathutils
           format: spdx-json
           artifact-name: sbom.spdx.json
+
+      # Log in to GitHub Container Registry using the token GitHub already
+      # provides this workflow - no extra secrets to create or manage.
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Cosign signs an image by its content digest inside a registry, so
+      # the image has to be pushed before it can be signed. Repo names can
+      # contain uppercase letters, but registry paths can't, hence the
+      # lowercasing. The digest (not just the tag) is captured because
+      # that's what uniquely identifies exactly the bytes we're signing.
+      - name: Push image to GHCR
+        id: push
+        run: |
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          docker tag mathutils "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:latest")
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # Install the Cosign CLI itself.
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Sign the pushed image "keylessly": instead of a private key we
+      # manage, Cosign asks GitHub for a short-lived OIDC token proving
+      # "this is workflow X in repo Y", trades it with Sigstore for a
+      # certificate, and uses that to sign. The signature is stored back
+      # in the registry next to the image - no separate file to track.
+      - name: Sign the image with Cosign
+        run: cosign sign --yes ${{ steps.push.outputs.digest }}
+
+      # Prove the signature is real and actually verifiable: check it was
+      # produced by this exact repository's GitHub Actions workflow via
+      # Sigstore's public transparency log (Fulcio/Rekor), not just any
+      # signature. This is the "demonstrate it can be verified" step.
+      - name: Verify the image signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            ${{ steps.push.outputs.digest }}
 
       # Run the image. Its default CMD is "pytest", so this executes
       # the test suite inside the container. If any test fails, pytest
