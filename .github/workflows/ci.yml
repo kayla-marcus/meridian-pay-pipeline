@@ -28,6 +28,18 @@ jobs:
       - name: Build Docker image
         run: docker build -t mathutils .
 
+      # Scan the image we just built for known vulnerabilities (CVEs) in
+      # its OS packages and Python dependencies. exit-code: 1 makes this
+      # step - and therefore the whole workflow - fail if any HIGH or
+      # CRITICAL vulnerability is found. severity controls which levels
+      # count; LOW/MEDIUM findings are ignored to keep this check focused.
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: mathutils
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
       # Run the image. Its default CMD is "pytest", so this executes
       # the test suite inside the container. If any test fails, pytest
       # exits non-zero and this step (and the workflow) fails too.
