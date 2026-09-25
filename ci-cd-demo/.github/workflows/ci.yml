@@ -1,0 +1,25 @@
+name: CI
+
+# Run this workflow whenever code is pushed to the repository.
+on:
+  push:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Check out the repository code so later steps can access it
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Build the Docker image from the Dockerfile in the repo root,
+      # tagging it "mathutils" so we can refer to it in the next step
+      - name: Build Docker image
+        run: docker build -t mathutils .
+
+      # Run the image. Its default CMD is "pytest", so this executes
+      # the test suite inside the container. If any test fails, pytest
+      # exits non-zero and this step (and the workflow) fails too.
+      - name: Run tests
+        run: docker run mathutils
