@@ -33,8 +33,13 @@ jobs:
       # step - and therefore the whole workflow - fail if any HIGH or
       # CRITICAL vulnerability is found. severity controls which levels
       # count; LOW/MEDIUM findings are ignored to keep this check focused.
+      #
+      # Pinned to a commit SHA (v0.35.0), not a version tag: in March 2026
+      # trivy-action's tags were compromised and force-pushed to malicious
+      # commits, so a tag reference is not trustworthy here. A commit SHA
+      # cannot be silently moved the way a tag can.
       - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           image-ref: mathutils
           severity: HIGH,CRITICAL
