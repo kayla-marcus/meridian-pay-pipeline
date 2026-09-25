@@ -44,6 +44,11 @@ jobs:
           image-ref: mathutils
           severity: HIGH,CRITICAL
           exit-code: "1"
+          # Only fail the build on vulnerabilities that actually have a
+          # fix available. A HIGH/CRITICAL CVE with no upstream patch yet
+          # isn't something we can act on, so failing over it just adds
+          # noise without giving us a real next step.
+          ignore-unfixed: "true"
 
       # Run the image. Its default CMD is "pytest", so this executes
       # the test suite inside the container. If any test fails, pytest
