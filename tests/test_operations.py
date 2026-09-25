@@ -12,7 +12,7 @@ from mathutils.operations import add, subtract, multiply, divide, is_prime
 
 def test_add():
     # Basic case: two positive numbers should sum correctly.
-    assert add(2, 3) == 6
+    assert add(2, 3) == 5
     # Edge case: positive + negative should cancel out to zero.
     assert add(-1, 1) == 0
 
