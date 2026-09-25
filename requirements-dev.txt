@@ -1,0 +1,4 @@
+# Development-only dependencies (testing, linting, etc.)
+# Pinned versions so builds are reproducible and easy to audit -
+# relevant later when we add SCA/dependency-scanning steps.
+pytest==8.3.3

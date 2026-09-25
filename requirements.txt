@@ -1,0 +1,4 @@
+# Runtime dependencies for mathutils.
+# Empty for now since the app has no external dependencies.
+# This file is the place a supply-chain-security pipeline would
+# scan/pin for the app's actual production dependencies.
