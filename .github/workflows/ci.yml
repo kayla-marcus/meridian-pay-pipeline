@@ -1,12 +1,22 @@
 name: CI
 
-# Run this workflow whenever code is pushed to the repository.
+# Run this workflow when code is pushed to a branch.
+# (Scoping to "branches" excludes tag pushes, which we don't need to build.)
 on:
   push:
+    branches: ["**"]
+
+# Least privilege: this workflow only reads code and runs a local Docker
+# build/test, so it never needs write access to the repository.
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # Fail fast instead of hanging until GitHub's default 6-hour limit
+    # if a step (e.g. docker build/run) ever gets stuck.
+    timeout-minutes: 10
 
     steps:
       # Check out the repository code so later steps can access it
