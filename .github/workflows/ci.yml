@@ -50,6 +50,22 @@ jobs:
           # noise without giving us a real next step.
           ignore-unfixed: "true"
 
+      # Generate a Software Bill of Materials (SBOM) for the image using
+      # Syft, via Anchore's official action. An SBOM is a complete
+      # inventory of everything inside the image: the OS packages and
+      # the Python packages, each with its exact name and version. The
+      # action automatically uploads the result as a workflow artifact,
+      # so it's downloadable from the run's summary page afterward.
+      #
+      # Pinned to a commit SHA (v0.24.0), following the same practice as
+      # the Trivy step above.
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: mathutils
+          format: spdx-json
+          artifact-name: sbom.spdx.json
+
       # Run the image. Its default CMD is "pytest", so this executes
       # the test suite inside the container. If any test fails, pytest
       # exits non-zero and this step (and the workflow) fails too.
