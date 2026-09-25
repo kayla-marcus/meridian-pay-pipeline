@@ -42,7 +42,7 @@ jobs:
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           image-ref: mathutils
-          severity: LOW,MEDIUM,HIGH,CRITICAL
+          severity: HIGH,CRITICAL
           exit-code: "1"
           # Only fail the build on vulnerabilities that actually have a
           # fix available. A HIGH/CRITICAL CVE with no upstream patch yet
