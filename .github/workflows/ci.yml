@@ -136,10 +136,13 @@ jobs:
 
       # Verify the SBOM attestation the same way - confirms it's both
       # present and genuinely signed by this repository's workflow.
+      # Output is piped through jq to print just the predicate type
+      # instead of dumping the entire SBOM JSON to the log, which can
+      # make this step appear to hang in the GitHub Actions UI.
       - name: Verify the SBOM attestation
         run: |
           cosign verify-attestation \
             --type spdxjson \
             --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            ${{ steps.push.outputs.digest }}
+            ${{ steps.push.outputs.digest }} | jq -r '.payload | @base64d | fromjson | .predicateType'
