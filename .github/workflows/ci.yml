@@ -137,10 +137,14 @@ jobs:
       # Verify the SBOM attestation the same way - confirms it's both
       # present and genuinely signed by this repository's workflow.
       # Output is piped through jq to print just the predicate type
-      # instead of dumping the entire SBOM JSON to the log, which can
-      # make this step appear to hang in the GitHub Actions UI.
+      # instead of dumping the entire SBOM JSON to the log, which made
+      # this step appear to hang in the GitHub Actions UI. pipefail is
+      # set so that if cosign fails, the step fails - without it, the
+      # step's exit code would come from jq alone, which could mask a
+      # real verification failure.
       - name: Verify the SBOM attestation
         run: |
+          set -o pipefail
           cosign verify-attestation \
             --type spdxjson \
             --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
