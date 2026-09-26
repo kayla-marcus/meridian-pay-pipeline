@@ -6,78 +6,90 @@ on:
   push:
     branches: ["**"]
 
-# Least privilege: this workflow reads code, pushes the built image to
-# GHCR, and signs it keylessly via OIDC - nothing more.
-permissions:
-  contents: read
-  packages: write   # push the image to GitHub Container Registry
-  id-token: write   # request the short-lived OIDC token Cosign uses to sign
-
 jobs:
+  # This job is the CI "gate": build, scan for vulnerabilities, and test.
+  # It runs on every branch and only ever needs read access to the repo -
+  # it never touches the registry or a signing key, so it gets no elevated
+  # permissions at all.
   build-and-test:
     runs-on: ubuntu-latest
-    # Fail fast instead of hanging until GitHub's default 6-hour limit
-    # if a step (e.g. docker build/run) ever gets stuck.
     timeout-minutes: 10
+    permissions:
+      contents: read
 
     steps:
-      # Check out the repository code so later steps can access it
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      # Build the Docker image from the Dockerfile in the repo root,
-      # tagging it "mathutils" so we can refer to it in the next step
       - name: Build Docker image
         run: docker build -t mathutils .
 
-      # Scan the image we just built for known vulnerabilities (CVEs) in
-      # its OS packages and Python dependencies. exit-code: 1 makes this
-      # step - and therefore the whole workflow - fail if any HIGH or
-      # CRITICAL vulnerability is found. severity controls which levels
-      # count; LOW/MEDIUM findings are ignored to keep this check focused.
-      #
-      # Pinned to a commit SHA (v0.35.0), not a version tag: in March 2026
-      # trivy-action's tags were compromised and force-pushed to malicious
-      # commits, so a tag reference is not trustworthy here. A commit SHA
-      # cannot be silently moved the way a tag can.
+      # Scan for known vulnerabilities (CVEs) before anything else happens.
+      # exit-code: 1 fails this step - and blocks every step after it,
+      # including the test run - if a fixable HIGH/CRITICAL is found.
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           image-ref: mathutils
           severity: HIGH,CRITICAL
           exit-code: "1"
-          # Only fail the build on vulnerabilities that actually have a
-          # fix available. A HIGH/CRITICAL CVE with no upstream patch yet
-          # isn't something we can act on, so failing over it just adds
-          # noise without giving us a real next step.
           ignore-unfixed: "true"
 
-      # Generate a Software Bill of Materials (SBOM) for the image using
-      # Syft, via Anchore's official action. An SBOM is a complete
-      # inventory of everything inside the image: the OS packages and
-      # the Python packages, each with its exact name and version. The
-      # action automatically uploads the result as a workflow artifact,
-      # so it's downloadable from the run's summary page afterward.
-      #
-      # Pinned to a commit SHA (v0.24.0), following the same practice as
-      # the Trivy step above.
-      - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          image: mathutils
-          format: spdx-json
-          artifact-name: sbom.spdx.json
+      # Run the test suite. This happens BEFORE anything is published -
+      # a broken build can no longer reach the registry.
+      - name: Run tests
+        run: docker run mathutils
 
-      # Log in to GitHub Container Registry using the token GitHub already
-      # provides this workflow - no extra secrets to create or manage.
+      # Save the exact image we just built, scanned, and tested to a tar
+      # file, then upload it as a short-lived workflow artifact. The
+      # publish job runs on a separate, fresh runner and can't see this
+      # job's Docker images otherwise - this hands off the literal tested
+      # bytes instead of having publish rebuild from source and hope it
+      # matches what was actually validated here.
+      - name: Save image for publish job
+        run: docker save mathutils -o mathutils.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: docker-image
+          path: mathutils.tar
+          retention-days: 1
+
+  # This job only runs for pushes to main, and only starts once
+  # build-and-test has fully succeeded (needs:). Feature branches can't
+  # publish or sign anything, and nothing gets published until it's
+  # actually passed scanning and tests. Elevated permissions (packages,
+  # id-token) live only here, not on the whole workflow.
+  publish:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write   # push the image to GitHub Container Registry
+      id-token: write   # request the short-lived OIDC token Cosign uses to sign
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Download the exact image build-and-test already built, scanned,
+      # and tested - no rebuild, so what gets pushed and signed is
+      # provably the same bytes that passed the gate job, not just "the
+      # same source, probably".
+      - name: Download image artifact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: docker-image
+
+      - name: Load image
+        run: docker load -i mathutils.tar
+
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # Cosign signs an image by its content digest inside a registry, so
-      # the image has to be pushed before it can be signed. Repo names can
-      # contain uppercase letters, but registry paths can't, hence the
-      # lowercasing. The digest (not just the tag) is captured because
-      # that's what uniquely identifies exactly the bytes we're signing.
       - name: Push image to GHCR
         id: push
         run: |
@@ -87,22 +99,34 @@ jobs:
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:latest")
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
-      # Install the Cosign CLI itself.
+      # Generate the SBOM from the image reference actually pushed to the
+      # registry (not the local build), so it's describing the exact
+      # digest that gets signed below, not just "an image that should be
+      # the same". output-file writes the SBOM to disk so the next step
+      # (cosign attest) can attach it to the image directly.
+      - name: Generate SBOM
+        id: sbom
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.push.outputs.digest }}
+          format: spdx-json
+          artifact-name: sbom.spdx.json
+          output-file: sbom.spdx.json
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Sign the pushed image "keylessly": instead of a private key we
-      # manage, Cosign asks GitHub for a short-lived OIDC token proving
-      # "this is workflow X in repo Y", trades it with Sigstore for a
-      # certificate, and uses that to sign. The signature is stored back
-      # in the registry next to the image - no separate file to track.
       - name: Sign the image with Cosign
         run: cosign sign --yes ${{ steps.push.outputs.digest }}
 
-      # Prove the signature is real and actually verifiable: check it was
-      # produced by this exact repository's GitHub Actions workflow via
-      # Sigstore's public transparency log (Fulcio/Rekor), not just any
-      # signature. This is the "demonstrate it can be verified" step.
+      # Attach the SBOM to the image itself as a signed attestation,
+      # rather than leaving it as a loose, unrelated workflow artifact.
+      # This cryptographically binds "here's what's inside this image"
+      # to the same digest the signature above covers, so a consumer can
+      # verify the SBOM actually describes this exact published image.
+      - name: Attest the SBOM to the image
+        run: cosign attest --yes --type spdxjson --predicate sbom.spdx.json ${{ steps.push.outputs.digest }}
+
       - name: Verify the image signature
         run: |
           cosign verify \
@@ -110,8 +134,12 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             ${{ steps.push.outputs.digest }}
 
-      # Run the image. Its default CMD is "pytest", so this executes
-      # the test suite inside the container. If any test fails, pytest
-      # exits non-zero and this step (and the workflow) fails too.
-      - name: Run tests
-        run: docker run mathutils
+      # Verify the SBOM attestation the same way - confirms it's both
+      # present and genuinely signed by this repository's workflow.
+      - name: Verify the SBOM attestation
+        run: |
+          cosign verify-attestation \
+            --type spdxjson \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            ${{ steps.push.outputs.digest }}
